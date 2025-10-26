@@ -1,7 +1,9 @@
-﻿[![downloads][downloads-shield]][downloads-url] [![Contributors][contributors-shield]][contributors-url] [![Forks][forks-shield]][forks-url] [![Stargazers][stars-shield]][stars-url] [![Issues][issues-shield]][issues-url] [![License][license-shield]][license-url] [![LinkedIn][linkedin-shield]][linkedin-url]
+[![downloads][downloads-shield]][downloads-url] [![Contributors][contributors-shield]][contributors-url] [![Forks][forks-shield]][forks-url] [![Stargazers][stars-shield]][stars-url] [![Issues][issues-shield]][issues-url] [![License][license-shield]][license-url] [![LinkedIn][linkedin-shield]][linkedin-url]
 
 # ![Logo][Logo] Create VSSolution File - Clean Architecture
 Create a solution file for Visual Studio with a clean architecture.
+
+[![Screenshot1][screenshot1]][screenshot1-url]
 
 ## Overview
 This PowerShell script automates the creation of a Visual Studio solution structure with multiple projects, including a UI project (WPF, WinUI, or MAUI) and associated class libraries. It sets up a standard folder layout and configures project references.
@@ -188,6 +190,6 @@ Thanks to contributors and the open-source community.
 
 <!-- screenshots -->
 <!--
-[screenshot1]: https://raw.githubusercontent.com/Tirsvad/Script.PS.Create-VSSolution/main/images/small/Screenshot1.png
-[screenshot1-url]: https://raw.githubusercontent.com/Tirsvad/Script.PS.Create-VSSolution/main/images/Screenshot1.png
+[screenshot1]: https://raw.githubusercontent.com/Tirsvad/Script.PS.Create-VSSolution/main/images/small/ScreenshotSolutionExplore1.jpg
+[screenshot1-url]: https://raw.githubusercontent.com/Tirsvad/Script.PS.Create-VSSolution/main/images/ScreenshotSolutionExplore1.png
 -->

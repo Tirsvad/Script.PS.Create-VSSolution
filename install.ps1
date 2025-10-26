@@ -98,10 +98,10 @@ $ScriptBaseName = [System.IO.Path]::GetFileNameWithoutExtension($ScriptFileName)
 # Main Script Logic
 
 # Show-Help
-# If user asked for help, show usage AND the comment-based help summary via Get-Help, then exit
+# If user asked for help, show usage AND then exit
 if ($Help) {
     Show-Usage
-    exit0
+    exit 0
 }
 
 if ($VerboseMode -ge 2) { Write-Host "Starting installation script for $ScriptBaseName..." -ForegroundColor Green }
