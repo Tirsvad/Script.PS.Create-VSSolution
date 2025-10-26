@@ -4,15 +4,25 @@ Thank you for your interest in contributing! Your help is greatly appreciated.
 This document outlines the process for contributing to the project.
 
 ## Coding Guidelines
-- MVVM architecture
-- SOLID principles
-- Clean Code practices
-- Unit testing with msTest
-- Dependency Injection
-- Asynchronous programming with async/await
-- Error handling and logging
-- Consistent naming conventions
-- XML documentation for public members
+
+This project uses PowerShell for scripting. Follow these PowerShell-specific guidelines:
+
+- Follow PowerShell best practices and the PowerShell Style Guidelines.
+- Use approved verbs for functions (see `Get-Verb`) and choose clear, descriptive function names.
+- Prefer advanced functions with `CmdletBinding()` so common parameters and `-Verbose`/`-Debug` are available.
+- Use strong typing and parameter validation attributes (`[Parameter()]`, `ValidateSet`, `ValidateNotNullOrEmpty`, etc.).
+- Support pipeline input for functions where appropriate and implement `Begin/Process/End` blocks when processing pipeline input.
+- Provide comment-based help for all public functions and scripts (examples, parameters, outputs).
+- Avoid aliases and use full cmdlet names in committed code (aliases are fine interactively).
+- Use `ShouldProcess`/`-WhatIf` for destructive operations and honor `-Confirm` when appropriate.
+- Use `Try/Catch` for error handling and throw or `Write-Error` as appropriate; prefer terminating errors when callers must act on failures.
+- Use `Write-Verbose`, `Write-Debug`, `Write-Warning`, and `Write-Error` for structured output and logging; do not write unstructured progress to stdout.
+- Keep formatting consistent (4-space indentation is recommended), avoid global variables, and keep functions focused and small.
+- Use `PSScriptAnalyzer` to lint scripts and address reported issues. Include a baseline or configuration if needed.
+- Organize modules with a `.psm1` and `.psd1` manifest; explicitly export public functions with `Export-ModuleMember`.
+- Write unit tests with `Pester` and place tests under a `tests/` folder. Run tests locally and in CI.
+- Avoid hard-coded credentials/secrets; use secure methods (secure strings, environment variables, or secret stores).
+- Use semantic versioning for modules and include a changelog for releases.
 
 ## How Can I Contribute?
 
