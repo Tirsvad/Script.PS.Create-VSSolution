@@ -1,4 +1,4 @@
-# Contributing to TirsvadGUI.UseCaseCanvas
+# Contributing to VSSolution Creation Script
 
 Thank you for your interest in contributing! Your help is greatly appreciated.  
 This document outlines the process for contributing to the project.
