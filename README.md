@@ -189,7 +189,5 @@ Thanks to contributors and the open-source community.
 [downloads-url]: https://github.com/Tirsvad/Script.PS.Create-VSSolution/releases
 
 <!-- screenshots -->
-<!--
 [screenshot1]: https://raw.githubusercontent.com/Tirsvad/Script.PS.Create-VSSolution/main/images/small/ScreenshotSolutionExplore1.jpg
 [screenshot1-url]: https://raw.githubusercontent.com/Tirsvad/Script.PS.Create-VSSolution/main/images/ScreenshotSolutionExplore1.png
--->
