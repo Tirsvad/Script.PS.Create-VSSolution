@@ -84,18 +84,27 @@ function Show-Usage {
     Write-Host
 }
 
-# Write helpers respect numeric verbosity:0 = silent,1 = errors/warnings only,2 = errors+warnings+ok+info,3+ = debug
-function Write-Info { if ($VerboseMode -ge 2) { Write-Host "[INFO]" -ForegroundColor Cyan -NoNewline; Write-Host " $args" } }
-function Write-Ok { if ($VerboseMode -ge 2) { Write-Host "[OK]" -ForegroundColor Green -NoNewline; Write-Host " $args" } }
-function Write-Err { if ($VerboseMode -ge 1) { Write-Host "[ERR]" -ForegroundColor Red -NoNewline; Write-Host " $args" } }
-function Write-Warn { if ($VerboseMode -ge 1) { Write-Host "[WARN]" -ForegroundColor Magenta -NoNewline; Write-Host " $args" } }
-function Write-Debug { if ($VerboseMode -ge 3) { Write-Host "[DEBUG]" -ForegroundColor Yellow -NoNewline; Write-Host " $args" } }
+################################################################################
+# Variables and initial setup
+################################################################################
+
+# Get the directory of the current script
+$ScriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
 
 # Name of the script we install/copy; use a single variable instead of hardcoded strings
 $ScriptFileName = 'Create-VSSolution.ps1'
 $ScriptBaseName = [System.IO.Path]::GetFileNameWithoutExtension($ScriptFileName)
 
+################################################################################
+# Include sourced libraries
+################################################################################
+. "$ScriptDirectory\inc\Logging.ps1"
+
+################################################################################
 # Main Script Logic
+################################################################################
+Write-Header "Create-VSSolution Installer"
+Write-Info "Using install path: $InstallPath"
 
 # Show-Help
 # If user asked for help, show usage AND then exit
@@ -103,8 +112,6 @@ if ($Help) {
     Show-Usage
     exit 0
 }
-
-if ($VerboseMode -ge 2) { Write-Host "Starting installation script for $ScriptBaseName..." -ForegroundColor Green }
 
 # Determine whether any action switches were provided. Discover switch parameters from the script's parameter metadata instead of hardcoding.
 # Exclude non-action switches such as Help, Force and VerboseMode.
@@ -141,71 +148,62 @@ foreach ($name in $actionSwitches) {
 if (-not $actionProvided) {
     $AddToPath = $true
     $CreateProfileFunction = $true
-    Write-Ok "No action flags provided - defaulting to -AddToPath"
+    Write-Debug "No action flags provided - defaulting to -AddToPath"
 }
 
 # Ensure install folder exists (safe to create even if deleting wrapper)
 if (-not (Test-Path -Path $InstallPath)) {
+    Write-Run "Creating install folder: $InstallPath"
     try {
         New-Item -ItemType Directory -Path $InstallPath -Force -ErrorAction Stop | Out-Null
         if (Test-Path -Path $InstallPath) {
-            Write-Ok "Created install folder: $InstallPath"
+            Write-RunDone $true
         }
         else {
-            Write-Warn "Failed to create install folder: $InstallPath"
+            Write-RunDone $false
+            Write-Err "Install folder creation reported success but path does not exist: $InstallPath"
+            exit 1
         }
     }
     catch {
-        Write-Warn "Failed to create install folder: $InstallPath. Error: $_"
+        Write-Err "Failed to create install folder: $InstallPath. Error: $_"
     }
 }
 
+################################################################################
+# Path to source and destination
+################################################################################
 $dest = Join-Path $InstallPath $ScriptFileName
+$source = (Join-Path $PSScriptRoot $ScriptFileName)
+$sourceInc = Join-Path $PSScriptRoot 'inc'
 
-if (-not $DeleteProfileFunction) {
-    $source = $null
-    # Determine source script path (assume repo root where this installer lives)
-    $possibleSources = @(
-        (Join-Path $PSScriptRoot (Join-Path 'src' $ScriptFileName)),
-        (Join-Path $PSScriptRoot $ScriptFileName),
-        (Join-Path (Get-Location).Path (Join-Path 'src' $ScriptFileName)),
-        (Join-Path (Get-Location).Path $ScriptFileName)
-    )
-
-    # Select the first existing path (use a simple loop to avoid Select-Object parsing issues)
-    foreach ($p in $possibleSources) {
-        if (Test-Path $p) { $source = $p; break }
-    }
-
-    if (-not $source) {
-        # When source not found, exit with code1
-        Write-Err "Source '$ScriptFileName' not found in repo - skipping copy/module installation. You can still use -AddToPath to add the scripts folder to PATH."
-        exit1
-    }
-}
-
-# If -Delete specified, perform cleanup and exit
+################################################################################
+# Perform cleanup and exit
+# Optionally: -Delete
+################################################################################
 if ($Delete) {
-    Write-Info "Running -Delete: will remove script, shim, module, profile wrapper and user PATH entry if present."
+    Write-Run "Starting cleanup of installed artifacts..."
+    [array]$errors = @()
+    [array]$warnings = @()
 
     # Remove script and shim
     $scriptPath = $dest
     $shimPath = Join-Path $InstallPath 'Create-VSSolution.cmd'
     if (Test-Path $scriptPath) {
-        try { Remove-Item -Path $scriptPath -Force -ErrorAction Stop; Write-Ok "Removed script: $scriptPath" } catch { Write-Err "Failed to remove script: $_" }
+        try { Remove-Item -Path $scriptPath -Force -ErrorAction Stop; Write-Debug "Removed script: $scriptPath" } catch { $errors += "Failed to remove script: $_" }
     }
-    else { Write-Ok "Script not found: $scriptPath" }
+    else { Write-Debug "Script not found: $scriptPath" }
     if (Test-Path $shimPath) {
-        try { Remove-Item -Path $shimPath -Force -ErrorAction Stop; Write-Ok "Removed shim: $shimPath" } catch { Write-Err "Failed to remove shim: $_" }
+        try { Remove-Item -Path $shimPath -Force -ErrorAction Stop; Write-Debug "Removed shim: $shimPath" } catch { $errors += "Failed to remove shim: $_" }
     }
-    else { Write-Warn "Shim not found: $shimPath" }
+    else { $warnings += "Shim not found: $shimPath"}
 
     # Remove module folder
     $moduleDir = Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules\Create-VSSolution'
     if (Test-Path $moduleDir) {
-        try { Remove-Item -Path $moduleDir -Recurse -Force -ErrorAction Stop; Write-Ok "Removed module folder: $moduleDir" } catch { Write-Err "Failed to remove module folder: $_" }
+        try { Remove-Item -Path $moduleDir -Recurse -Force -ErrorAction Stop; Write-Debug "Removed module folder: $moduleDir" } catch { $errors += "Failed to remove module folder: $_" }
     }
-    else { Write-Warn "Module folder not found: $moduleDir" }
+    else { $warnings += "Module folder not found: $moduleDir" }
 
     # Remove install path from user PATH
     try {
@@ -215,13 +213,13 @@ if ($Delete) {
             $newParts = $parts | Where-Object { -not ([string]::Equals($_, $InstallPath, [System.StringComparison]::InvariantCultureIgnoreCase)) }
             $new = [string]::Join(';', $newParts)
             [Environment]::SetEnvironmentVariable('Path', $new, 'User')
-            Write-Ok "Removed $InstallPath from user PATH. Restart terminals to pick up change."
+            Write-Debug "Removed $InstallPath from user PATH. Restart terminals to pick up change."
         }
         else {
-            Write-Ok "User PATH did not contain $InstallPath"
+            Write-Debug "User PATH did not contain $InstallPath"
         }
     }
-    catch { Write-Err "Failed to update user PATH: $_" }
+    catch { $errors +=  "Failed to update user PATH: $_" }
 
     # Remove wrapper from profile (reuse existing removal logic)
     if (Test-Path -Path $PROFILE) {
@@ -234,40 +232,73 @@ if ($Delete) {
                 $out += $line
             }
             Set-Content -Path $PROFILE -Value $out
-            Write-Ok "Removed Create-VSSolution wrapper from profile ($PROFILE)."
+            Write-Debug "Removed Create-VSSolution wrapper from profile ($PROFILE)."
         }
-        catch { Write-Err "Failed to remove wrapper from profile: $_" }
+        catch { $errors += "Failed to remove wrapper from profile: $_" }
     }
     else {
-        Write-Ok "Profile $PROFILE does not exist. Nothing to remove."
+        Write-Debug "Profile $PROFILE does not exist. Nothing to remove."
     }
 
-    Write-Host "Delete complete." -ForegroundColor Cyan
+    if ($errors.Count -eq 0 ) {
+        Write-RunDone $true
+    }
+    else {
+        Write-RunDone $false
+    }
+
+    if ($warnings.Count -gt 0) {
+        Write-Host "Cleanup completed with warnings:"
+        foreach ($warn in $warnings) {
+            Write-Warn " - $warn"
+        }
+    }
+
+    if ($errors.Count -gt 0) {
+        Write-Host "Cleanup completed with errors:"
+        foreach ($err in $errors) {
+            Write-Err " - $err"
+        }
+        exit 1
+    }
     exit 0
 }
 
-# Optionally add to user PATH
+################################################################################
+# Add script path to user PATH
+# Optionally: -AddToPath
+################################################################################
 if ($AddToPath) {
+    Write-Run "Adding $InstallPath to user PATH..."
     $current = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($current -notlike "*${InstallPath}*") {
         $new = if ([string]::IsNullOrEmpty($current)) { $InstallPath } else { $current + ';' + $InstallPath }
         [Environment]::SetEnvironmentVariable('Path', $new, 'User')
-        Write-Ok "Added $InstallPath to user PATH. Restart terminals to pick up change."
+        Write-RunDone $true
+        Write-Debug "Added $InstallPath to user PATH. Restart terminals to pick up change."
     }
     else {
-        Write-Info "$InstallPath already in user PATH."
+        Write-RunDone $true
+        Write-Warn "$InstallPath already in user PATH."
     }
 }
 
+################################################################################
+# Cope Scripts and inc folder
+################################################################################
 # If not deleting, perform copy to install path
 if (-not $DeleteProfileFunction) {
+    Write-Run "Copying $ScriptFileName to $InstallPath..."
+    [array]$errors = @()
+    [array]$warnings = @()
     # Use a variable for Test-Path result to avoid parsing issues on some PowerShell versions
     $destExists = Test-Path $dest
-    # When checking for existing destination or aborting, ensure we use `exit1`
+    # When checking for existing destination or aborting, ensure we use `exit 1`
     if ($destExists) {
         if (-not $Force) {
             $resp = Read-Host "File $dest already exists. Overwrite? (y/N)"
             if ($resp -notin @('y', 'Y')) {
+                Write-RunDone $false
                 Write-Warn "Aborting installation to avoid overwriting existing file."
                 exit 1
             }
@@ -275,41 +306,53 @@ if (-not $DeleteProfileFunction) {
     }
     try {
         Copy-Item -Path $source -Destination $dest -Force:$Force -ErrorAction Stop
-        Write-Ok "Copied $ScriptFileName to $dest"
+        Write-Debug "Copied $ScriptFileName to $dest"
     }
     catch {
-        Write-Err "Failed to copy $ScriptFileName to ${dest}: $_"
-        exit 1
+        $errors += "Failed to copy $ScriptFileName to ${dest}: $_"
     }
-    # If -AsModule specified, install as simple module
-    if ($AsModule) {
-        $moduleDir = Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules\Create-VSSolution'
+    # Copy 'inc' folder if it exists
+    if (Test-Path $sourceInc) {
+        Write-Info "Copying 'inc' folder to $InstallPath"
         try {
-            if (-not (Test-Path -Path $moduleDir)) {
-                New-Item -ItemType Directory -Path $moduleDir -Force -ErrorAction Stop | Out-Null
-                Write-Ok "Created module directory: $moduleDir"
-            }
-            $moduleDest = Join-Path $moduleDir $ScriptFileName
-            Copy-Item -Path $source -Destination $moduleDest -Force:$Force -ErrorAction Stop
-            Write-Ok "Installed Create-VSSolution as module in: $moduleDest"
+            Copy-Item -Path $sourceInc -Destination $InstallPath -Recurse -Force:$Force -ErrorAction Stop
+            Write-Debug "Copied 'inc' folder to $InstallPath"
         }
         catch {
-            Write-Err "Failed to install module: $_"
-            exit 1
+            $errors += "Failed to copy 'inc' folder to ${InstallPath}: $_"
         }
+    }
+    else {
+        $errors += "'inc' folder not found at expected location: $sourceInc"
+    }
+    if ($errors.Count -eq 0 ) {
+        Write-RunDone $true
+    }
+    else {
+        Write-RunDone $false
+        foreach ($err in $errors) {
+            Write-Err " - $err"
+        }
+        exit 1
     }
 }
 
-# Optionally install as a simple module
+################################################################################
+# Install as a simple module
+# Optionally: -AsModule
+################################################################################
 if ($AsModule) {
+    Write-Run "Installing Create-VSSolution as a PowerShell module..."
     $moduleDir = Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules\Create-VSSolution'
     if (-not (Test-Path $moduleDir)) { New-Item -ItemType Directory -Path $moduleDir -Force | Out-Null }
     $moduleFile = Join-Path $moduleDir 'Create-VSSolution.psm1'
     try {
         if ($Force) { Copy-Item -Path $source -Destination $moduleFile -Force -ErrorAction Stop } else { Copy-Item -Path $source -Destination $moduleFile -ErrorAction Stop }
+        Copy-Item -Path $sourceInc -Destination (Join-Path $moduleDir 'inc') -Recurse -Force:$Force -ErrorAction Stop
         Unblock-File -Path $moduleFile -ErrorAction SilentlyContinue
     }
     catch {
+        Write-RunDone $false
         Write-Err "Failed to copy module file: $_"
         exit 1
     }
@@ -327,7 +370,8 @@ if ($AsModule) {
             Description   = 'Create-VSSolution PowerShell module'
         } | Out-String | Set-Content -Path $psd1
     }
-    Write-Ok "Installed as module at $moduleDir. Import with 'Import-Module Create-VSSolution' or call the exported functions after a restart."
+    Write-RunDone $true
+    Write-Info "Module import with 'Import-Module Create-VSSolution' or call the exported functions after a restart."
 }
 
-if ($VerboseMode -ge 2) { Write-Host "Done." -ForegroundColor Green }
+Write-Info "Done."
