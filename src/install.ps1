@@ -104,7 +104,7 @@ $ScriptIncPath = Join-Path -Path (Join-Path -Path $ScriptDirectory -ChildPath $S
 # Download, unzip and dot-source logging library
 $loggingDir = Join-Path -Path $ScriptIncPath -ChildPath 'TirsvadScript.Logging'
 $loggingScript = Join-Path -Path $loggingDir -ChildPath 'TirsvadScript.Logging.ps1'
-$loggingZipUrl = 'https://github.com/TirsvadScript/PS.Logging/releases/download/v0.1.0/TirsvadScript.Logging.zip'
+$loggingZipUrl = 'https://github.com/TirsvadScript/PS.Logging/releases/download/v0.1.1/TirsvadScript.Logging.zip'
 
 if (-not (Test-Path -Path $loggingScript)) {
     Write-Host "Logging library not found. Downloading from $loggingZipUrl..."
