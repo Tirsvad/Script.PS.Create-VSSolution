@@ -26,9 +26,9 @@ param (
     [string]$SolutionName,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("blank", "wpf", "winui-blank", "winui-package")]
+    [ValidateSet("blank", "wpf")]
     [Alias('p')]
-    [string]$ProjectTemplate = "winui-package",
+    [string]$ProjectTemplate = "wpf",
 
     [ValidateSet("net9.0", "net8.0")]
     [Alias('t')]
@@ -53,13 +53,6 @@ function Show-Usage {
     Write-Host
 }
 
-# Write helpers respect numeric verbosity:0 = silent,1 = errors/warnings only,2 = errors+warnings+ok+info,3+ = debug
-function Write-Info { if ($VerboseMode -ge 2) { Write-Host "[INFO]" -ForegroundColor Cyan -NoNewline; Write-Host " $args" } }
-function Write-Ok { if ($VerboseMode -ge 2) { Write-Host "[OK]" -ForegroundColor Green -NoNewline; Write-Host " $args" } }
-function Write-Err { if ($VerboseMode -ge 1) { Write-Host "[ERR]" -ForegroundColor Red -NoNewline; Write-Host " $args" } }
-function Write-Warn { if ($VerboseMode -ge 1) { Write-Host "[WARN]" -ForegroundColor Magenta -NoNewline; Write-Host " $args" } }
-function Write-Debug { if ($VerboseMode -ge 3) { Write-Host "[DEBUG]" -ForegroundColor Yellow -NoNewline; Write-Host " $args" } }
-
 function FailIfNoDotnet {
     # Ensure either dotnet CLI or Visual Studio's devenv is available before proceeding
     $hasDotnet = (Get-Command dotnet -ErrorAction SilentlyContinue) -ne $null
@@ -79,6 +72,58 @@ function FailIfNoDotnet {
         Write-Error "Neither dotnet CLI nor Visual Studio (devenv.exe) was found. Install the .NET SDK or provide a valid Visual Studio path."
         exit2
     }
+}
+
+function CheckDependencies {
+    foreach ($dep in $dependenciesTupleList) {
+        $moduleName = $dep.Item1
+        $flagName = $dep.Item2
+        $url = $dep.Item3
+        $destinationPath = Join-Path -Path $ScriptDirectoryInc -ChildPath $moduleName
+
+        # See if the dependency flag is present in the script scope
+        $isLoaded = Get-Variable -Name $flagName -Scope Script -ErrorAction SilentlyContinue
+
+        # If the folder doesn't exist or the flag isn't set, attempt to download and include
+        if ((-not (Test-Path -Path $destinationPath)) -or ($null -eq $isLoaded) -or (-not $isLoaded.Value)) {
+            Write-Warn "Dependency $moduleName is not loaded. Attempting to download and include it from $url"
+            UnzipFileFromUrl -url $url -destinationPath $destinationPath
+            if (Test-Path -Path (Join-Path -Path $destinationPath -ChildPath "$($moduleName).ps1")) {
+                . (Join-Path -Path $destinationPath -ChildPath "$($moduleName).ps1")
+            }
+            else {
+                Write-Warn "Downloaded dependency but could not find $($moduleName).ps1 in $destinationPath"
+            }
+        }
+    }
+    if (-not $TirsvadScript.LoggingLoaded) {
+        Write-Error "TirsvadScript.Logging module is not loaded."
+        exit2
+    }
+}
+
+function UnzipFileFromUrl {
+    param (
+        [string]$url,
+        [string]$destinationPath = $null
+    )
+
+    if (-not $destinationPath) {
+        # Default to the script's 'inc' directory
+        $destinationPath = Join-Path -Path $ScriptDirectoryInc -ChildPath ""
+    }
+
+    # Ensure destination directory exists
+    if (-not (Test-Path -Path $destinationPath)) {
+        New-Item -ItemType Directory -Path $destinationPath -Force | Out-Null
+    }
+
+    $tempZip = Join-Path -Path $env:TEMP -ChildPath ([System.IO.Path]::GetRandomFileName() + ".zip")
+    Write-Debug "Downloading $url to temporary file $tempZip"
+    Invoke-WebRequest -Uri $url -OutFile $tempZip
+    Write-Debug "Extracting $tempZip to $destinationPath"
+    Expand-Archive -Path $tempZip -DestinationPath $destinationPath -Force
+    Remove-Item -Path $tempZip
 }
 
 function Run {
@@ -102,146 +147,6 @@ function Run {
         Write-Err "Process $cmd $($argList -join ' ') failed with exit code $($proc.ExitCode)"
     }
     return $proc.ExitCode
-}
-
-function SetCorrectProjectTemplate {
-    param ([string]$template)
-
-    switch ($template) {
-        "winui-blank" { return "Blank App, Unpackaged (WinUI3)" }
-        "winui-package" { return "Blank App, Packaged (WinUI3)" }
-        default { return $template }
-    }
-}
-
-# Helper: try creating a project using Visual Studio's devenv automation; return $true on success
-function TryCreateWithDevenv {
-    param (
-        [string]$templateName,
-        [string]$projectName,
-        [string]$projectPath,
-        [string]$solutionPath
-    )
-
-    if (-not $devenvPath -or -not (Test-Path $devenvPath)) {
-        return $false
-    }
-
-    # Build the single /Command argument for devenv
-    $command = 'Project.AddNewProject "' + $templateName + '" "' + $projectName + '" "' + $solutionPath + '"'
-    $arg = "/Command:$command"
-
-    Write-Host "Attempting to create project via Visual Studio: $templateName -> $projectName"
-    try {
-        $proc = Start-Process -FilePath $devenvPath -ArgumentList $arg -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-        if ($proc.ExitCode -eq 0) {
-            Write-Host "Created project via Visual Studio: $projectName"
-            return $true
-        }
-        else {
-            Write-Warning "devenv returned exit code $($proc.ExitCode) when creating $projectName"
-            return $false
-        }
-    }
-    catch {
-        Write-Warning "devenv automation failed: $($_.Exception.Message)"
-        return $false
-    }
-}
-
-# Helper to add a project to a specific solution and verify
-function AddProjectToSolution {
-    param (
-        [string]$slnPath,
-        [string]$projPath
-    )
-
-    if (-not (Test-Path $slnPath)) {
-        Write-Warning "Solution file not found: $slnPath"
-        return $false
-    }
-    if (-not (Test-Path $projPath)) {
-        Write-Warning "Project file not found: $projPath"
-        return $false
-    }
-
-    Write-Host "Adding project to solution: $projPath -> $slnPath"
-    & dotnet sln $slnPath add $projPath | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "dotnet sln add failed with exit code $LASTEXITCODE"
-        return $false
-    }
-
-    return $true
-}
-
-function CreateSolution {
-    param (
-        [string]$solutionName,
-        [string]$solutionPath
-    )
-    Write-Debug "Creating solution: $solutionName"
-    $cmd = "dotnet new sln -n `"$solutionName`" -o `"$solutionPath`""
-    $rc = Run $cmd
-    if ($rc -ne 0) {
-        Write-Warn "'dotnet new sln' failed (rc=$rc)."
-        exit 2
-    }
-}
-
-function CreateSolutionDirectoryBuildProps {
-    param (
-        [string]$solutionPath
-    )
-    $slnDir = Get-Item $solutionPath
-    $slnPropFile = Join-Path $slnDir.FullName "Directory.Build.props"
-    $content = @'
-<Project>
-  <PropertyGroup>
-    <!-- Resolve drive root: prefer SolutionDir (when building from solution), otherwise use project directory -->
-    <SolutionDriveRoot Condition="'$(SolutionDriveRoot)' == '' and '$(SolutionDir)' != ''">$([System.IO.Path]::GetPathRoot('$(SolutionDir)'))</SolutionDriveRoot>
-    <SolutionDriveRoot Condition="'$(SolutionDriveRoot)' == ''">$([System.IO.Path]::GetPathRoot('$(MSBuildProjectDirectory)'))</SolutionDriveRoot>
-      
-    <!-- Only set these if not already specified (allows per-project overrides) -->
-    <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">$([System.IO.Path]::Combine('$(SolutionDriveRoot)','g','$(MSBuildProjectName)'))</BaseOutputPath>
-    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">$([System.IO.Path]::Combine('$(BaseOutputPath)','obj'))</BaseIntermediateOutputPath>
-
-    <!-- keep IntermediateOutputPath consistent -->
-    <IntermediateOutputPath>$(BaseIntermediateOutputPath)</IntermediateOutputPath>
-
-    <!-- generated-source controls -->
-    <EmitCompilerGeneratedFiles Condition="'$(EmitCompilerGeneratedFiles)' == ''">true</EmitCompilerGeneratedFiles>
-    <CompilerGeneratedFilesOutputPath Condition="'$(CompilerGeneratedFilesOutputPath)' == ''">$([System.IO.Path]::Combine('$(BaseOutputPath)','gen','$(MSBuildProjectName)'))</CompilerGeneratedFilesOutputPath>
-    <GeneratedFilesDestination Condition="'$(GeneratedFilesDestination)' == ''">$(CompilerGeneratedFilesOutputPath)</GeneratedFilesDestination>
-
-    <!-- Default AppX/package layout path for WinUI/MSIX packaging; can be overridden per-project -->
-    <PackageLayoutPath Condition="'$(PackageLayoutPath)' == ''">$([System.IO.Path]::Combine('$(BaseOutputPath)','AppX'))</PackageLayoutPath>
-    <AppxPackageDir Condition="'$(AppxPackageDir)' == ''">$([System.IO.Path]::Combine('$(BaseOutputPath)','AppX'))</AppxPackageDir>
-    <PackageLayout Condition="'$(PackageLayout)' == ''">$([System.IO.Path]::Combine('$(BaseOutputPath)','AppX'))</PackageLayout>
-  </PropertyGroup>
-</Project>
-'@
-    Write-Debug "Creating Directory.Build.props at: $slnPropFile"
-    $content | Out-File -FilePath $slnPropFile -Encoding UTF8 -Force
-}
-
-function CreateSolutionDirectoryTargets {
-    param (
-        [string]$solutionPath
-    )
-    $slnDir = Get-Item $solutionPath
-    $slnTargetFile = Join-Path $slnDir.FullName "Directory.Build.targets"
-    $content = @'
-<Project>
-  <!-- Ensure output/intermediate/generated directories exist before any project builds -->
-  <Target Name="EnsureSolutionDriveRootDirs" BeforeTargets="BeforeBuild">
-    <MakeDir Directories="$(BaseIntermediateOutputPath)" Condition="'$(BaseIntermediateOutputPath)' != ''" />
-    <MakeDir Directories="$(CompilerGeneratedFilesOutputPath)" Condition="'$(CompilerGeneratedFilesOutputPath)' != ''" />
-  </Target>
-</Project>
-'@
-    Write-Debug "Creating Directory.Build.targets at: $slnTargetFile"
-    $content | Out-File -FilePath $slnTargetFile -Encoding UTF8 -Force
 }
 
 function CreateProjectPath {
@@ -275,11 +180,11 @@ function CreateCleanArchitectureProjects {
         $projPath = Join-Path -Path (Join-Path -Path $solutionPath -ChildPath $projectPath) -ChildPath $projName
         Write-Debug "Creating project: $projName at $projPath"
         $cmd = "dotnet new $projType -n `"$projName`" -o `"$projPath`" -f `"$targetFramework`""
- $rc = Run $cmd
- if ($rc -ne 0) {
- Write-Warn "'dotnet new' failed for project $projName (rc=$rc)."
- exit 2
- }
+        $rc = Run $cmd
+        if ($rc -ne 0) {
+            Write-Warn "'dotnet new' failed for project $projName (rc=$rc)."
+            exit 2
+        }
         # Add project to solution
         $slnFile = Join-Path $solutionPath "$($SolutionName).sln"
         $projFile = Join-Path $projPath "$($projName).csproj"
@@ -324,128 +229,100 @@ function CreateSubFolderForEachCleanArchitectureProjects {
     }
 }
 
-function CreateWinUIProject {
-    param (
-        [string]$projectName,
-        [string]$projectTemplate,
-        [string]$solutionPath
-    )
+################################################################################
+# Script initialization
+################################################################################
+# Get the directory of the current script
+$ScriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
+# Namespace
+$ScriptNamespace = "TirsvadScript.CreateVSSolution"
+# Path to the 'inc' directory for sourced libraries
+$ScriptDirectoryInc = Join-Path -Path $ScriptDirectory -ChildPath (Join-Path -Path $ScriptNamespace -ChildPath "inc")
 
-    # Determine target project path (create under solution folder)
-    $projectPath = Join-Path $solutionPath $projectName
+################################################################################
+# Include logging library early so helper functions (Write-Warn etc.) are available
+################################################################################
+. "$ScriptDirectoryInc\TirsvadScript.Logging\TirsvadScript.Logging.ps1"
 
-    # Try Visual Studio automation first
-    if ($devenvPath -and (Test-Path $devenvPath)) {
-        $ok = TryCreateWithDevenv -templateName $projectTemplate -projectName $projectName -projectPath $projectPath -solutionPath $solutionPath
-        if ($ok) { return }
-        Write-Warning "devenv creation failed or was unsupported; falling back to dotnet new."
-    }
+# Dependencies
+$dependenciesTupleList = New-Object 'System.Collections.Generic.List[System.Tuple[string,string,string]]'
+$dependenciesTupleList.Add([Tuple]::Create("TirsvadScript.Logging", "TirsvadScript.LoggingLoaded", "https://github.com/TirsvadScript/PS.Logging/releases/download/v0.1.0/TirsvadScript.Logging.zip"))
 
-    # Fallback: use dotnet new
-    Write-Host "Creating WinUI project with 'dotnet new winui': $projectName"
-    $cmd = "dotnet new winui -n `"$projectName`" -o `"$projectPath`""
-    $rc = Run $cmd
-    if ($rc -ne 0) {
-        Write-Warning "'dotnet new winui' failed (rc=$rc). Ensure WinUI templates / Windows App SDK are installed."
-    }
+CheckDependencies
+# exit0
 
-    # Verify project created
-    if (-not (Test-Path $projectPath)) {
-        Write-Error "Failed to create the project: $projectName"
-        exit2
-    }
-}
-
-function CheckDevEnv {
-    param ([string]$devenvExe)
-    Write-Debug "Checking for Visual Studio's devenv at: $devenvExe"
-    if (Test-Path $devenvExe) {
-        $script:devenvPath = $devenvExe
-        Write-Ok "Using Visual Studio's devenv at: $devenvExe"
-    }
-    else {
-        Write-Warn "Visual Studio's devenv.exe not found at expected path: $devenvExe"
-        $userInput = Read-Host 'Enter full path to devenv.exe (leave empty to skip)'
-        if (-not [string]::IsNullOrWhiteSpace($userInput)) {
-            CheckDevEnv $userInput
-        }
-        else {
-             $script:devenvPath = $null
-             Write-Warn "Proceeding without Visual Studio's devenv; dotnet CLI will be used where possible."
-        }
-    }
-}
-
-function CheckWinUIEnvironment {
-    # Ensure that either Visual Studio or dotnet CLI has WinUI templates installed
-    $hasWinUITemplates = $false
-    # Check via dotnet CLI
-    $templates = & dotnet new --list
-    if ($templates -match "winui") {
-        $hasWinUITemplates = $true
-    }
-    if (-not $hasWinUITemplates) {
-        Write-Warn "WinUI templates not found in dotnet CLI."
-        if ($devenvPath -and (Test-Path $devenvPath)) {
-            Write-Ok "Visual Studio is available; assuming WinUI support is present."
-            $hasWinUITemplates = $true
-        }
-        else {
-            Write-Err "Neither dotnet CLI nor Visual Studio has WinUI support. Please install the Windows App SDK."
-            exit 2
-        }
-    }
-}
+################################################################################
+# Script parameters and defaults
+################################################################################
+# Target framework for winui projects
+$TargetFrameworkWinUI = "net9.0-windows10.0.22621.0"
 
 # Remember starting location and set baseDir to a new folder named after the solution
 $startingLocation = Get-Location
-$baseDir = Join-Path -Path $startingLocation -ChildPath $SolutionName
-if (-not (Test-Path $baseDir)) {
-    New-Item -ItemType Directory -Path $baseDir | Out-Null
-    Write-Ok "Created solution directory: $baseDir"
+
+$solutionPath = Join-Path -Path $startingLocation -ChildPath $SolutionName
+if (-not (Test-Path $solutionPath)) {
+    New-Item -ItemType Directory -Path $solutionPath | Out-Null
+    Write-Ok "Created solution directory: $solutionPath"
 }
-# Check if baseDir is empty
-if ((Get-ChildItem -Path $baseDir | Measure-Object).Count -ne 0) {
-    Write-Err "The solution directory is not empty: $baseDir"
+
+# Check if solutionDirectory is empty
+if ((Get-ChildItem -Path $solutionPath | Measure-Object).Count -ne 0) {
+    Write-Err "The solution directory is not empty: $solutionPath"
     exit 2
 }
-Push-Location $baseDir
+Push-Location $solutionPath
 
-# Default path to Visual Studio's (adjust for your version/edition if needed)
-$devenvExe = "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"
 
-# Check for Visual Studio's devenv.exe
-CheckDevEnv $devenvExe
+################################################################################
+# Include sourced libraries
+################################################################################
+. "$ScriptDirectoryInc\create-solution.ps1"
 
+################################################################################
 # Main script logic
+################################################################################
+
+Write-Header "Creating Visual Studio Solution: $SolutionName" (
+    "Template: $ProjectTemplate",
+    "Target Framework: $TargetFramework",
+    "Solution Path: $solutionPath"
+)
 
 # Show-Help
 # If user asked for help, show usage and then exit
 if ($Help) {
  Show-Usage
- exit0
+ exit
 }
 
 # Ensure dotnet CLI or Visual Studio is available
 FailIfNoDotnet
 
 # For WinUI projects, ensure Visual Studio is available
-CheckWinUIEnvironment
+# CheckWinUIEnvironment
 
 # Create solution and clean architecture projects 
-CreateSolution -solutionName $SolutionName -solutionPath $baseDir
-CreateSolutionDirectoryBuildProps -solutionPath $baseDir
-CreateSolutionDirectoryTargets -solutionPath $baseDir
-$projPath = CreateProjectPath -solutionPath $baseDir
-CreateCleanArchitectureProjects -solutionPath $baseDir -targetFramework $TargetFramework
+CreateSolution -solutionName $SolutionName -solutionPath $solutionPath
+CreateSolutionDirectoryBuildProps -solutionPath $solutionPath
+CreateSolutionDirectoryTargets -solutionPath $solutionPath
+$projPath = CreateProjectPath -solutionPath $solutionPath
+CreateCleanArchitectureProjects -solutionPath $solutionPath -targetFramework $TargetFramework
 
 switch ($ProjectTemplate) {
     "blank" {
-        Write-Ok "Created blank solution: $SolutionName"
+        Write-Info "Created blank solution: $SolutionName"
     }
     "wpf" {
-        $projectType = "WPF"
-        Write-Ok "Created WPF solution: $SolutionName"
+        $projectType = "wpf"
+        $ProjectPath = Join-Path -Path (Join-Path -Path $solutionPath -ChildPath "src") -ChildPath "WpfUI"
+        Write-Info "Created WPF solution: $SolutionName"
+        $cmd = "dotnet new $projectType -n `"WpfUI`" -o `"${ProjectPath}`" -f `"$targetFramework`""
+        $rc = Run $cmd
+        if ($rc -ne 0) {
+            Write-Warn "'dotnet new' failed for project WpfUI (rc=$rc)."
+            exit 2
+        }
     }
     default {
         Write-Err "Unsupported project template: $ProjectTemplate"

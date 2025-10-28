@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <!-- Resolve drive root: prefer SolutionDir (when building from solution), otherwise use project directory -->
+    <SolutionDriveRoot Condition="'$(SolutionDriveRoot)' == '' and '$(SolutionDir)' != ''">$([System.IO.Path]::GetPathRoot('$(SolutionDir)'))</SolutionDriveRoot>
+    <SolutionDriveRoot Condition="'$(SolutionDriveRoot)' == ''">$([System.IO.Path]::GetPathRoot('$(MSBuildProjectDirectory)'))</SolutionDriveRoot>
+      
+    <!-- Only set these if not already specified (allows per-project overrides) -->
+    <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">$([System.IO.Path]::Combine('$(SolutionDriveRoot)','g','$(MSBuildProjectName)'))</BaseOutputPath>
+    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">$([System.IO.Path]::Combine('$(BaseOutputPath)','obj'))</BaseIntermediateOutputPath>
+
+    <!-- keep IntermediateOutputPath consistent -->
+    <IntermediateOutputPath>$(BaseIntermediateOutputPath)</IntermediateOutputPath>
+
+  </PropertyGroup>
+</Project>

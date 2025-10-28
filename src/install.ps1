@@ -94,11 +94,40 @@ $ScriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
 # Name of the script we install/copy; use a single variable instead of hardcoded strings
 $ScriptFileName = 'Create-VSSolution.ps1'
 $ScriptBaseName = [System.IO.Path]::GetFileNameWithoutExtension($ScriptFileName)
+$ScriptNameSpace = 'TirsvadScript.CreateVSSolution'
+# Build the inc path as: $ScriptDirectory\TirsvadScript.CreateVSSolution\inc
+$ScriptIncPath = Join-Path -Path (Join-Path -Path $ScriptDirectory -ChildPath $ScriptNameSpace) -ChildPath 'inc'
 
 ################################################################################
 # Include sourced libraries
 ################################################################################
-. "$ScriptDirectory\inc\Logging.ps1"
+# Download, unzip and dot-source logging library
+$loggingDir = Join-Path -Path $ScriptIncPath -ChildPath 'TirsvadScript.Logging'
+$loggingScript = Join-Path -Path $loggingDir -ChildPath 'TirsvadScript.Logging.ps1'
+$loggingZipUrl = 'https://github.com/TirsvadScript/PS.Logging/releases/download/v0.1.0/TirsvadScript.Logging.zip'
+
+if (-not (Test-Path -Path $loggingScript)) {
+    Write-Host "Logging library not found. Downloading from $loggingZipUrl..."
+    $tmpZip = Join-Path -Path $env:TEMP -ChildPath ([System.IO.Path]::GetRandomFileName() + '.zip')
+    try {
+        Invoke-WebRequest -Uri $loggingZipUrl -OutFile $tmpZip -UseBasicParsing -ErrorAction Stop
+        if (-not (Test-Path -Path $loggingDir)) { New-Item -ItemType Directory -Path $loggingDir -Force | Out-Null }
+        Expand-Archive -Path $tmpZip -DestinationPath $loggingDir -Force
+        Remove-Item -Path $tmpZip -Force
+    }
+    catch {
+        Write-Host "Failed to download or extract logging package: $_" -ForegroundColor Red
+    }
+}
+
+if (Test-Path -Path $loggingScript) {
+    . $loggingScript
+    Write-Debug "Loaded logging from: $loggingScript"
+}
+else {
+    Write-Err "Logging script not found at expected location: $loggingScript"
+    exit 1
+}
 
 ################################################################################
 # Main Script Logic
@@ -175,7 +204,6 @@ if (-not (Test-Path -Path $InstallPath)) {
 ################################################################################
 $dest = Join-Path $InstallPath $ScriptFileName
 $source = (Join-Path $PSScriptRoot $ScriptFileName)
-$sourceInc = Join-Path $PSScriptRoot 'inc'
 
 ################################################################################
 # Perform cleanup and exit
@@ -197,6 +225,13 @@ if ($Delete) {
         try { Remove-Item -Path $shimPath -Force -ErrorAction Stop; Write-Debug "Removed shim: $shimPath" } catch { $errors += "Failed to remove shim: $_" }
     }
     else { $warnings += "Shim not found: $shimPath"}
+
+    #Remove folder if it exists
+    $incDir = Join-Path $InstallPath $ScriptNameSpace
+    if (Test-Path $incDir) {
+        try { Remove-Item -Path $incDir -Recurse -Force -ErrorAction Stop; Write-Debug "Removed inc folder: $incDir" } catch { $errors += "Failed to remove inc folder: $_" }
+    }
+    else { $warnings += "Inc folder not found: $incDir" }
 
     # Remove module folder
     $moduleDir = Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules\Create-VSSolution'
@@ -284,7 +319,7 @@ if ($AddToPath) {
 }
 
 ################################################################################
-# Cope Scripts and inc folder
+# Copy Scripts and inc folder
 ################################################################################
 # If not deleting, perform copy to install path
 if (-not $DeleteProfileFunction) {
@@ -311,19 +346,20 @@ if (-not $DeleteProfileFunction) {
     catch {
         $errors += "Failed to copy $ScriptFileName to ${dest}: $_"
     }
+
     # Copy 'inc' folder if it exists
-    if (Test-Path $sourceInc) {
-        Write-Info "Copying 'inc' folder to $InstallPath"
+    if (Test-Path $ScriptNameSpace) {
+        Write-Info "Copying $ScriptNameSpace folder to $InstallPath"
         try {
-            Copy-Item -Path $sourceInc -Destination $InstallPath -Recurse -Force:$Force -ErrorAction Stop
-            Write-Debug "Copied 'inc' folder to $InstallPath"
+            Copy-Item -Path $ScriptNameSpace -Destination $InstallPath -Recurse -Force:$Force -ErrorAction Stop
+            Write-Debug "Copied '$ScriptNameSpace' folder to $InstallPath"
         }
         catch {
-            $errors += "Failed to copy 'inc' folder to ${InstallPath}: $_"
+            $errors += "Failed to copy '$ScriptNameSpace' folder to ${InstallPath}: $_"
         }
     }
     else {
-        $errors += "'inc' folder not found at expected location: $sourceInc"
+        $errors += "$ScriptNameSpace folder not found at expected location: $sourceInc"
     }
     if ($errors.Count -eq 0 ) {
         Write-RunDone $true
