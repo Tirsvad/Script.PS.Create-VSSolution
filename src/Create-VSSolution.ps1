@@ -126,29 +126,6 @@ function UnzipFileFromUrl {
     Remove-Item -Path $tempZip
 }
 
-function Run {
-    param (
-        [string]$cmd,
-        [object]$second = $null
-    )
-
-    # If second argument provided, treat as executable path + args; otherwise treat first as a PowerShell command string
-    if ($null -ne $second) {
-        $argList = @()
-        if ($second -is [System.Array]) { $argList = $second } else { $argList = @($second) }
-        Write-Debug "Running: $cmd $($argList -join ' ')"
-        $proc = Start-Process -FilePath $cmd -ArgumentList $argList -Wait -PassThru -WindowStyle Hidden
-    }
-    else {
-        Write-Debug "Running: $cmd"
-        $proc = Start-Process -FilePath "powershell" -ArgumentList @('-NoProfile', '-Command', $cmd) -Wait -PassThru -WindowStyle Hidden
-    }
-    if ($proc.ExitCode -ne 0) {
-        Write-Err "Process $cmd $($argList -join ' ') failed with exit code $($proc.ExitCode)"
-    }
-    return $proc.ExitCode
-}
-
 function CreateProjectPath {
     param (
         [string]$solutionPath,
@@ -168,14 +145,67 @@ function CreateCleanArchitectureProjects {
         [string]$projectPath = "src",
         [string]$targetFramework
     )
+
+    function Remove-DefaultClassFile {
+        param (
+            [string] $projectPath
+        )
+        $classFile = Join-Path -Path $projectPath -ChildPath "Class1.cs"
+        if (Test-Path $classFile) {
+            $cmd = "Remove-Item -Path `"$classFile`""
+            $rc = Run $cmd
+            Write-Debug "Removed default class file: $classFile"
+        }
+    }
+
+    function AddReferencesToProject {
+        param (
+            [string] $projectPath,
+            [string[]] $references
+        )
+        # Find the project's .csproj file
+        $projCsproj = Get-ChildItem -Path $projectPath -Filter '*.csproj' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $projCsproj) {
+            Write-Warn "No .csproj found in project folder: $projectPath. Skipping reference addition."
+            return
+        }
+        $projCsprojPath = $projCsproj.FullName
+
+        foreach ($ref in $references) {
+            # Determine the sibling project directory (projects live under the same parent 'src' folder)
+            $parentDir = Split-Path -Path $projectPath -Parent
+            $refProjPath = Join-Path -Path $parentDir -ChildPath $ref
+            $refProjFile = Join-Path -Path $refProjPath -ChildPath "$($ref).csproj"
+            Write-Debug "Reference project file: $refProjFile"
+            Write-Debug "Reference project path: $refProjPath"
+            Write-Debug "projCsprojPath: $projCsprojPath"
+            if (Test-Path $refProjFile) {
+                Write-Debug "Adding reference to project: $refProjFile in $projCsprojPath"
+                # Use dotnet CLI directly so we can check the exit code
+                $cmd = "dotnet reference add `"$refProjFile`" --project `"$projCsprojPath`""
+                $rc = Run $cmd
+                if ($rc -ne 0) {
+                    Write-Warn "dotnet add returned exit code $rc when adding reference $refProjFile to $projCsprojPath"
+                }
+                else {
+                    Write-RunDone $true
+                }
+            }
+            else {
+                Write-Warn "Reference project file not found: $refProjFile"
+            }
+        }
+    }
+
     $projects = @(
-        @{ Name = "Core"; Suffix = ".Core"; Type = "classlib" },
-        @{ Name = "Infrastructure"; Suffix = ".Infrastructure"; Type = "classlib" },
-        @{ Name = "Domain"; Suffix = ".Domain"; Type = "classlib" }
+        @{ Name = "Domain"; Suffix = ".Domain"; Type = "classlib"; References = @() },
+        @{ Name = "Core"; Suffix = ".Core"; Type = "classlib"; References = @("Domain") },
+        @{ Name = "Infrastructure"; Suffix = ".Infrastructure"; Type = "classlib"; References = @("Core") }
     )
     foreach ($proj in $projects) {
         $projName = $proj.Name
         $projType = $proj.Type
+        $projRefs = $proj.References
         # Build path as: $solutionPath\$projectPath\$projName
         $projPath = Join-Path -Path (Join-Path -Path $solutionPath -ChildPath $projectPath) -ChildPath $projName
         Write-Debug "Creating project: $projName at $projPath"
@@ -193,6 +223,17 @@ function CreateCleanArchitectureProjects {
             Write-Warning "Failed to add project $projName to solution."
             exit 2
         }
+
+        # Remove Class1.cs
+        Remove-DefaultClassFile $projPath
+
+        if (-not $projRefs.Count -eq 0) {
+        # Add references
+        Write-Debug "project path $projPath"
+        Write-Debug "project refs $projRefs"
+        AddReferencesToProject -projectPath $projPath -references $projRefs
+        }
+
         CreateSubFolderForEachCleanArchitectureProjects -ProjectPath $projPath -projectName $projName
     }
 }
@@ -238,6 +279,7 @@ $ScriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
 $ScriptNamespace = "TirsvadScript.CreateVSSolution"
 # Path to the 'inc' directory for sourced libraries
 $ScriptDirectoryInc = Join-Path -Path $ScriptDirectory -ChildPath (Join-Path -Path $ScriptNamespace -ChildPath "inc")
+$ScriptDirectoryTemplates = Join-Path -Path $ScriptDirectory -ChildPath (Join-Path -Path $ScriptNamespace -ChildPath "templates")
 
 ################################################################################
 # Include logging library early so helper functions (Write-Warn etc.) are available
@@ -246,7 +288,10 @@ $ScriptDirectoryInc = Join-Path -Path $ScriptDirectory -ChildPath (Join-Path -Pa
 
 # Dependencies
 $dependenciesTupleList = New-Object 'System.Collections.Generic.List[System.Tuple[string,string,string]]'
-$dependenciesTupleList.Add([Tuple]::Create("TirsvadScript.Logging", "TirsvadScript.LoggingLoaded", "https://github.com/TirsvadScript/PS.Logging/releases/download/v0.1.0/TirsvadScript.Logging.zip"))
+# $dependenciesTupleList.Add([Tuple]::Create("TirsvadScript.Logging", "TirsvadScript.LoggingLoaded", "https://github.com/TirsvadScript/PS.Logging/releases/download/v0.1.0/TirsvadScript.Logging.zip"))
+
+# internal include of dependencies
+. "$ScriptDirectoryInc\command-handler.ps1"
 
 CheckDependencies
 # exit0
@@ -263,7 +308,7 @@ $startingLocation = Get-Location
 $solutionPath = Join-Path -Path $startingLocation -ChildPath $SolutionName
 if (-not (Test-Path $solutionPath)) {
     New-Item -ItemType Directory -Path $solutionPath | Out-Null
-    Write-Ok "Created solution directory: $solutionPath"
+    Write-Debug "Created solution directory: $solutionPath"
 }
 
 # Check if solutionDirectory is empty
@@ -316,13 +361,21 @@ switch ($ProjectTemplate) {
     "wpf" {
         $projectType = "wpf"
         $ProjectPath = Join-Path -Path (Join-Path -Path $solutionPath -ChildPath "src") -ChildPath "WpfUI"
-        Write-Info "Created WPF solution: $SolutionName"
         $cmd = "dotnet new $projectType -n `"WpfUI`" -o `"${ProjectPath}`" -f `"$targetFramework`""
         $rc = Run $cmd
         if ($rc -ne 0) {
             Write-Warn "'dotnet new' failed for project WpfUI (rc=$rc)."
             exit 2
         }
+        # Add project to solution
+        $slnFile = Join-Path -Path $solutionPath -ChildPath "$($SolutionName).sln"
+        $projFile = Join-Path -Path $ProjectPath -ChildPath "WpfUI.csproj"
+        $added = AddProjectToSolution -slnPath $slnFile -projPath $projFile
+        if (-not $added) {
+            Write-Warning "Failed to add project $projName to solution."
+            exit 2
+        }
+        Write-Info "Created WPF solution: $SolutionName"
     }
     default {
         Write-Err "Unsupported project template: $ProjectTemplate"
